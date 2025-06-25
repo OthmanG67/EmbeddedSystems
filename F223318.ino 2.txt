@@ -1,0 +1,553 @@
+#include <Wire.h>
+#include <Adafruit_RGBLCDShield.h>
+#include <utility/Adafruit_MCP23017.h>
+#include <EEPROM.h>
+#include <avr/eeprom.h>
+
+
+// Create an instance of the Adafruit_RGBLCDShield class
+Adafruit_RGBLCDShield lcd = Adafruit_RGBLCDShield();
+
+class Device {
+  private:
+    String id;
+    String deviceType;
+    String location;
+    String state;
+    
+  public:
+    Device(){};
+    Device(String id, String deviceType, String location, String state) {
+      this->id = id;
+      this->deviceType = deviceType;
+      this->location = location;
+      this->state = state;
+    }
+    
+    void setId(String id) {
+      this->id = id;
+    }
+    
+    void setDeviceType(String deviceType) {
+      this->deviceType = deviceType;
+    }
+    
+    void setLocation(String location) {
+      this->location = location;
+    }
+    
+    void setState(String state) {
+      this->state = state;
+    }
+    
+    String getId() {
+      return this->id;
+    }
+    
+    String getDeviceType() {
+      return this->deviceType;
+    }
+    
+    String getLocation() {
+      return this->location;
+    }
+    
+    String getState() {
+      return this->state;
+    }
+    String toString() {
+      return "Device{id: " + id + ", deviceType: " + deviceType + ", location: " + location + ", state: " + state + "}";
+    }
+};
+
+class PowerDevice : public Device {
+  private:
+    int powerPercentage;
+  public:
+    PowerDevice(String id, String deviceType, String location, String state, int powerPercentage)
+      : Device(id, deviceType, location, state) {
+        this->powerPercentage = powerPercentage;
+    }
+    void setPowerPercentage(int powerPercentage) {
+      this->powerPercentage = powerPercentage;
+    }
+    int getPowerPercentage() {
+      return this->powerPercentage;
+    }
+    String toString() {
+    String str = "PowerDevice{id: " + getId() + ", deviceType: " + getDeviceType() 
+                   + ", location: " + getLocation() + ", state: " + getState()
+                   + ", powerPercentage: " + String(powerPercentage) + "}";
+      return str;
+    }
+};
+
+
+class Thermostat : public Device{
+  private: 
+    int temperature;
+  public:
+    Thermostat(String id, String deviceType, String location, String state, int temperature)
+      : Device(id, deviceType, location, state) {
+        this->temperature = temperature;
+    }
+  void setTemperature(int temperature){
+    this->temperature = temperature;
+  }
+  int getTemperature(){
+    return this->temperature;
+  }
+  String toString() {
+    String str = "Thermostat{id: " + getId() + ", deviceType: " + getDeviceType() 
+                   + ", location: " + getLocation() + ", state: " + getState()
+                   + ", Temperature: " + String(temperature) + "}";
+      return str;
+    }
+};
+
+
+
+int arraySize = 0;
+int currentIndex = 0;
+Device* mySmartDevices[10];
+bool selectHeld = false;
+uint32_t lastChecked = 0;
+// Define constants for EEPROM addresses
+const int EEPROM_MAGIC_ADDR = 0; // Magic number address
+const int DEVICE_DATA_ADDR = 1; // Device data start address
+
+// Define a magic number to check if EEPROM was previously written
+const uint8_t MAGIC_NUMBER = 42;
+
+
+
+// Define custom characters
+uint8_t arrowDown[8] = {
+  B00100,
+  B01110,
+  B11111,
+  B00100,
+  B00100,
+  B00100,
+  B00100,
+  B00000
+};
+
+uint8_t arrowUp[8] = {
+  B00000,
+  B00100,
+  B00100,
+  B00100,
+  B00100,
+  B11111,
+  B01110,
+  B00100
+};
+
+/*void DisplayDevices(){
+for (int i = 0; i < arraySize; i++) {
+  // Access the element at index i
+  Serial.print(mySmartDevices[i]->toString());
+}
+}*/
+
+int getFreeRAM() {
+  extern int __heap_start, *__brkval;
+  int freeRAM;
+  return (int) &freeRAM - (__brkval == 0 ? (int) &__heap_start : (int) __brkval);
+}
+
+int findDevice(String id){
+  int index = -1;
+  for (int i=0; i<arraySize;i++){
+    if (mySmartDevices[i]->getId() == id){
+      index = i;
+      break;
+    }
+  }
+  return index;
+}
+
+
+
+void AddSmartDevices(String id, String type, String location) {
+  int index = findDevice(id);
+  if (index != -1) {
+    // Device with this ID already exists, update its location
+    mySmartDevices[index]->setLocation(location);
+    Serial.print("Device updated: ");
+    updateDisplay(mySmartDevices[index],index);
+    return;
+  }
+
+  // Find the first available index to add the new device
+  int availableIndex = -1;
+  for (int i = 0; i < 10; i++) {
+    if (mySmartDevices[i] == NULL) {
+      availableIndex = i;
+      break;
+    }
+  }
+
+  // If there is an available index, add the new device
+  if (availableIndex != -1) {
+    if (type == "S" || type == "L") {
+      //Instantiating a new PowerDevice object
+      PowerDevice* newDevice = new PowerDevice(id, type, location, "OFF", 0);
+      mySmartDevices[availableIndex] = newDevice;
+      arraySize++;
+      Serial.print("DEBUG : New device added: ");
+      updateDisplay(mySmartDevices[availableIndex],index);      
+    }
+    else if (type == "T") {
+      //Instantiating a new Thermostat object
+      Thermostat* newDevice = new Thermostat(id, type, location, "OFF", -1);
+      mySmartDevices[availableIndex] = newDevice;
+      arraySize++;
+      Serial.print("DEBUG : New device added: ");
+      updateDisplay(mySmartDevices[availableIndex],availableIndex);
+    }
+    else if (type == "O" || type == "C") {
+      //Instantiating a new Device object
+      Device* newDevice = new Device(id, type, location, "OFF");
+      mySmartDevices[availableIndex] = newDevice;
+      arraySize++;
+      Serial.print("DEBUG : New device added: ");
+      updateDisplay(mySmartDevices[availableIndex],availableIndex);
+    }
+    else {
+      Serial.println("ERROR : Invalid device type");
+    }
+  }
+  else {
+    Serial.println("ERROR : Cannot add device, maximum number of devices reached");
+  }
+}
+
+
+void removeDevice(String id){
+  int index = findDevice(id);
+  if (index != -1) {
+    mySmartDevices[index] = new Device(); // set the element to an empty SmartDevice object
+    for (int i = index; i < arraySize - 1; i++) {
+      mySmartDevices[i] = mySmartDevices[i+1];
+    }
+    arraySize--;
+  }
+}
+
+
+
+void UpdateSmartDeviceState(String id, String state){
+  int index = findDevice(id);
+
+  if (index == -1){
+    Serial.print("ERROR : Cannot Find Device");
+    }
+  else{
+    Serial.print("DEBUG : Device found");
+    if (state == "ON" ||state == "OFF"){
+    mySmartDevices[index]->setState(state);
+    //Serial.print(mySmartDevices[index]->toString());
+    updateDisplay(mySmartDevices[index],index);
+  }else{
+    Serial.print("ERORR : Invalid State");
+  }
+}
+}
+
+void UpdateTempOrPower(String id, int TemporPower){
+  int index = findDevice(id);
+  Serial.print(mySmartDevices[index]->getDeviceType());
+  if (index == -1){
+    Serial.print("ERROR : Device doesn't exist");
+  //Checks whether device type is a thermostat, speaker or light.
+  }else{
+    if(mySmartDevices[index]->getDeviceType() == "S" || mySmartDevices[index]->getDeviceType() == "L"){
+      if (TemporPower >= 1 && TemporPower <= 100){
+        ((PowerDevice*) mySmartDevices[index])->setPowerPercentage(TemporPower);
+        updateDisplay(mySmartDevices[index],index);
+        //Serial.print(((PowerDevice*)mySmartDevices[index]->toString()));
+        }
+      else{
+        Serial.print("ERROR : Temperature Should be between 1-100");
+      }
+    }else if (mySmartDevices[index]->getDeviceType() == "T") {
+  if (TemporPower >= 9 && TemporPower <= 32) {
+      ((Thermostat*) mySmartDevices[index])->setTemperature(TemporPower);
+      //Serial.print(((Thermostat*) mySmartDevices[index])->toString());
+      updateDisplay(mySmartDevices[index], index);
+  }else{
+    Serial.print("ERROR : temperature has to be between 9 and 32");
+  }
+  }else{
+    Serial.print("ERROR : Device Doesn't support power or temperature");
+  }
+}
+}
+
+void updateDisplay(Device* mySmartDevice,int currentIndex) {
+  lcd.clear();
+  lcd.setCursor(0,0);
+  if(mySmartDevice->getId() != ""){
+    if(currentIndex == 0){
+      lcd.print(" ");
+    }
+    else{
+    lcd.write(0);
+    }
+    lcd.print(mySmartDevice->getId());
+    lcd.print(" ");
+    lcd.print(mySmartDevice->getLocation());
+    lcd.setCursor(0,1);
+    if (currentIndex == arraySize - 1) {
+      lcd.print(" ");
+    }
+    else{
+      lcd.write(1);
+    }
+    lcd.print(mySmartDevice->getDeviceType());
+    lcd.print(" ");
+    if (mySmartDevice->getState() == "ON"){
+      lcd.print("  ");
+      lcd.print(mySmartDevice->getState());
+      lcd.print(" ");
+      lcd.setBacklight(2);
+    }
+    else{
+      lcd.print(mySmartDevice->getState());
+      lcd.print(" ");
+      lcd.setBacklight(3);
+    }
+    if (mySmartDevice->getDeviceType() == "S" || mySmartDevice->getDeviceType() == "L") {
+      if (((PowerDevice*) mySmartDevice)->getPowerPercentage() >= 0 && ((PowerDevice*) mySmartDevice)->getPowerPercentage() <= 100) {
+        String powerString = String(((PowerDevice*) mySmartDevice)->getPowerPercentage());
+        lcd.print(powerString + "%");
+      }
+    } else if (mySmartDevice->getDeviceType() == "T") {
+      if (((Thermostat*) mySmartDevice)->getTemperature() >= 9 && ((Thermostat*) mySmartDevice)->getTemperature() <= 32) {
+        String tempString = String(((Thermostat*) mySmartDevice)->getTemperature());
+        lcd.print(tempString);
+        lcd.print((char)223);
+        lcd.print("C");
+      }
+    }
+  }
+}
+
+void setup(){
+lcd.setBacklight(5);
+}
+
+
+void loop() {
+  uint8_t pressedButtons = lcd.readButtons();
+  static enum { SYNC, MAIN} phase = SYNC;  // Define the synchronization and main phases
+
+    switch (phase) {
+
+    case SYNC: {
+      static unsigned long syncTimer = 0;
+      const unsigned long syncInterval = 1000;
+      static bool receivedX = false;
+      lcd.begin(16, 2);
+      Serial.begin(9600);
+      lcd.createChar(0, arrowDown);  // Create the custom character for arrow down
+      lcd.createChar(1, arrowUp);
+
+      if (millis() - syncTimer >= syncInterval) {
+        Serial.print("Q");
+        syncTimer = millis();
+      }
+
+      if (Serial.available() > 0) {
+        char receivedChar = Serial.read();
+
+        // Check if it is an 'X'
+        if (receivedChar == 'X') {
+          // Send the string "BASIC" followed by a newline
+          phase = MAIN;
+          Serial.println(" UDCHARS, FREERAM, HCL");
+          // Set the backlight to white
+          lcd.setBacklight(7);
+          break; // Exit the loop
+        } else if (receivedChar == '\n' || receivedChar == '\r') {
+          // Handle error: received a newline or carriage return character
+          Serial.println("ERROR : Cannot have newline or carriage return characters");
+        }
+      }
+      break;
+    }
+
+case MAIN: {
+  // Check for incoming messages from the Serial interface
+  if (Serial.available() > 0) {
+    // Read the incoming message
+    String message = Serial.readStringUntil('\n');
+    char parsedMessage = message.charAt(0);
+    // Parse the message to extract the device ID, type, location, and state
+    switch (parsedMessage) {
+      case 'A': {
+        String deviceId = message.substring(2, 5);
+        String deviceType = message.substring(6, 7);
+        String deviceLocation = message.substring(8);
+        if (deviceLocation == "") {
+          Serial.print("ERROR : Enter location name");
+        } else {
+          AddSmartDevices(deviceId, deviceType, deviceLocation);
+        }
+        break;
+      }
+      case 'S': {
+        String deviceId = message.substring(2, 5);
+        String state = message.substring(6);
+        UpdateSmartDeviceState(deviceId, state);
+        break;
+      }
+      case 'P': {
+        String deviceId = message.substring(2, 5);
+        int setTempOrPower = message.substring(6).toInt();
+        UpdateTempOrPower(deviceId, setTempOrPower);
+        break;
+      }
+      case 'R': {
+        String deviceId = message.substring(2, 5);
+        removeDevice(deviceId);
+        break;
+      }
+    }
+
+  }
+  switch (lcd.readButtons()){
+       // Check if up button is pressed
+    case BUTTON_UP:{
+    // move up an index
+    currentIndex--;
+    // check if index is out of bounds
+    if (currentIndex < 0) {
+      currentIndex = 0;
+    }
+    updateDisplay(mySmartDevices[currentIndex],currentIndex);
+    break;
+    }
+    case BUTTON_DOWN:{
+    // move down an index
+    currentIndex++;
+    // check if index is out of bounds
+    if (currentIndex >= arraySize) {
+      currentIndex = arraySize - 1;
+    }
+    updateDisplay(mySmartDevices[currentIndex],currentIndex);
+    break;
+    }
+    case BUTTON_LEFT:{
+    Device* offSmartDevices[10];
+    int offDevicesCount = 0;
+    int index = 0;
+  // Iterate over mySmartDevices array to find "OFF" devices and store their indices
+  for (int i = 0; i < arraySize; i++) {
+    if (mySmartDevices[i]->getState() == "OFF") {
+      offSmartDevices[offDevicesCount] = mySmartDevices[i];
+      offDevicesCount++;
+  }
+  }
+  if(offDevicesCount > 0){
+    //Enter a while loop to keep you in offSmartDevices array
+    updateDisplay(offSmartDevices[0],0);
+    while(true){
+      //Move down an index in the offSmartDevices array
+      if(lcd.readButtons() & BUTTON_UP){
+        index--;
+        if(index < 0){
+          index = 0;
+        }
+        updateDisplay(offSmartDevices[index],index);
+        //Move up an index in the offSmartDevices array
+      }else if(lcd.readButtons() & BUTTON_DOWN){
+        index++;
+        if(index >= offDevicesCount){
+         index = offDevicesCount - 1; 
+        }
+        updateDisplay(offSmartDevices[index],index);
+        //Exit the loop and return to normal mySmartDevices array
+      }else if(lcd.readButtons() & BUTTON_LEFT){
+        updateDisplay(mySmartDevices[currentIndex],currentIndex);
+        break;        
+      }
+    }
+  }else{
+    //Display Nothings off if there are no off devices
+    lcd.clear();
+    lcd.setCursor(0,0);
+    lcd.print("NOTHINGs OFF");
+    delay(1000);
+    updateDisplay(mySmartDevices[currentIndex],currentIndex);
+    break;
+}
+  break;
+  }
+  case BUTTON_RIGHT:{
+  Device* onSmartDevices[10];
+  int onDevicesCount = 0;
+  int index = 0;
+  // Add devices that are on to onSmartDevices array
+  for (int i = 0; i < arraySize; i++) {
+    if (mySmartDevices[i]->getState() == "ON") {
+      onSmartDevices[onDevicesCount] = mySmartDevices[i];
+      onDevicesCount++;
+    }
+  }
+
+  if (onDevicesCount > 0) {
+    updateDisplay(onSmartDevices[0],0);
+    while (true) {
+      // Move up an index in the offSmartDevices array
+      if (lcd.readButtons() & BUTTON_UP) {
+        index--;
+        if (index < 0) {
+          index = 0;
+        }
+        updateDisplay(onSmartDevices[index], index);
+      }
+      // Move down an index in the onSmartDevices array
+      else if (lcd.readButtons() & BUTTON_DOWN) {
+        index++;
+        if (index >= onDevicesCount) {
+          index = onDevicesCount - 1;
+        }
+        updateDisplay(onSmartDevices[index], index);
+      }
+      // Exit the loop and return to normal mySmartDevices array
+      else if (lcd.readButtons() & BUTTON_RIGHT) {
+        updateDisplay(mySmartDevices[currentIndex],currentIndex);
+        break;
+      }
+    }
+  } else {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Nothing's on");
+    delay(1000);
+    updateDisplay(mySmartDevices[currentIndex],currentIndex);
+    break;
+  }
+  break;
+}
+  case BUTTON_SELECT:{
+    lcd.setBacklight(5);
+    lcd.setCursor(0,0);
+    lcd.clear();
+    lcd.print("F223318");
+    lcd.setCursor(0,1);
+    lcd.print("FREE RAM: ");
+    lcd.print(getFreeRAM());
+    delay(1000);
+    updateDisplay(mySmartDevices[currentIndex],currentIndex);
+  }
+}
+}
+}
+}
+
+
+
